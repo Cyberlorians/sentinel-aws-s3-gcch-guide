@@ -1,5 +1,8 @@
 # AWS CloudTrail into Sentinel GCC High: exactly how the working test was built
 
+**For a new deployment, use the [deployment README](README.md). Do not combine
+this historical CloudFormation procedure with its Microsoft-package procedure.**
+
 **This is the earlier CloudFormation experiment.** The separate
 [commercial-package walkthrough](PRODUCT-GROUP-PACKAGE-WALKTHROUGH.md)
 documents the actual Microsoft-package mirror and execution. Do not mix the

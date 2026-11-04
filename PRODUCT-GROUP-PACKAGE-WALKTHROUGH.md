@@ -1,5 +1,10 @@
 # Mirror Microsoft's commercial AWS package for Sentinel GCC High
 
+**Deploying a new environment? Start with the [deployment README](README.md).**
+It provides one ordered procedure with the required commands and answers.
+This longer document explains the implementation and records the actual lab
+run; it is not an additional set of steps to execute after the README.
+
 ## What this guide is, and what it replaces
 
 This is the **actual commercial-package execution path**, not the earlier
