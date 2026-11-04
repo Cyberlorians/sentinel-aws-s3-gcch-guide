@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Reproduction of the tested AWS commercial CloudTrail to Azure Government stack; target bindings parameterized.
+Parameters:
+  WorkspaceCustomerId:
+    Type: String
+    Description: Government Log Analytics workspace customer ID, not organization tenant or subscription ID.
+    AllowedPattern: '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+  SentinelRoleName:
+    Type: String
+    Description: New dedicated IAM role name beginning with OIDC_.
+    AllowedPattern: 'OIDC_[A-Za-z0-9+=,.@_-]+'
+    MaxLength: 64
+  ExistingGovernmentOidcProviderArn:
+    Type: String
+    Default: ''
+    Description: Leave blank only if the government OIDC provider does not exist in this AWS account; otherwise supply its reviewed ARN.
+    AllowedPattern: '(^$)|(^arn:aws:iam::[0-9]{12}:oidc-provider/sts\.windows\.net/cab8a31a-1906-4287-a0d8-4eef66b95f6e/$)'
+Conditions:
+  CreateGovernmentOidcProvider: !Equals [!Ref ExistingGovernmentOidcProviderArn, '']
+Resources:
+  GovernmentOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateGovernmentOidcProvider
+    Properties:
+      Url: https://sts.windows.net/cab8a31a-1906-4287-a0d8-4eef66b95f6e/
+      ClientIdList:
+        - api://d4230588-5f84-4281-a9c7-2c15194b28f7
+      ThumbprintList:
+        - 626d44e704d1ceabe3bf0d53397464ac8080142c
+  Queue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+      VisibilityTimeout: 300
+      SqsManagedSseEnabled: true
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref Queue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt Queue.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub arn:aws:s3:::sentinel-gcch-cloudtrail-${AWS::AccountId}-${AWS::Region}
+  Bucket:
+    Type: AWS::S3::Bucket
+    DependsOn: QueuePolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub sentinel-gcch-cloudtrail-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: s3:ObjectCreated:*
+            Queue: !GetAtt Queue.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: !Sub AWSLogs/${AWS::AccountId}/CloudTrail/
+                  - Name: suffix
+                    Value: .json.gz
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: RequireTLS
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt Bucket.Arn
+              - !Sub ${Bucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: CloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt Bucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/sentinel-gcch-management-events
+          - Sid: CloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub ${Bucket.Arn}/AWSLogs/${AWS::AccountId}/*
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceArn: !Sub arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/sentinel-gcch-management-events
+  Trail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: BucketPolicy
+    Properties:
+      TrailName: sentinel-gcch-management-events
+      S3BucketName: !Ref Bucket
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+      EventSelectors:
+        - IncludeManagementEvents: true
+          ReadWriteType: All
+  SentinelRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref SentinelRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateGovernmentOidcProvider, !Ref GovernmentOidcProvider, !Ref ExistingGovernmentOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                sts.windows.net/cab8a31a-1906-4287-a0d8-4eef66b95f6e/:aud: api://d4230588-5f84-4281-a9c7-2c15194b28f7
+                sts:RoleSessionName: !Sub MicrosoftSentinel_${WorkspaceCustomerId}
+      Policies:
+        - PolicyName: ReadDedicatedCloudTrailAndConsumeQueue
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub ${Bucket.Arn}/AWSLogs/${AWS::AccountId}/CloudTrail/*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !GetAtt Bucket.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:GetQueueUrl
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt Queue.Arn
+Outputs:
+  RoleArn:
+    Value: !GetAtt SentinelRole.Arn
+  SqsUrl:
+    Value: !Ref Queue
+  BucketName:
+    Value: !Ref Bucket
+  DestinationTable:
+    Value: AWSCloudTrail

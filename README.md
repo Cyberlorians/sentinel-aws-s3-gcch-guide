@@ -1,5 +1,18 @@
 # AWS CloudTrail S3 ingestion into Microsoft Sentinel GCC High
 
+## Start here: the exact path that actually worked
+
+For the detailed product-group handover, use
+[PRODUCT-GROUP-WALKTHROUGH.md](PRODUCT-GROUP-WALKTHROUGH.md).
+It documents the actual **AWS console CloudFormation + Azure CLI REST** route,
+with click-by-click actions, every API call explained, trust and data flow,
+real result excerpts, and troubleshooting.
+[cloudtrail-gcch-reproduction.yaml](cloudtrail-gcch-reproduction.yaml) is the
+parameterized reproduction template; it is not the untouched deployed lab file.
+
+**The script-based AWS provisioning instructions below are an alternative,
+not the route executed during the successful live deployment.**
+
 Deploy the native AWS S3 backend connector when the general AWS Content hub
 solution/connector tile is missing or deprecated in Azure Government.
 
