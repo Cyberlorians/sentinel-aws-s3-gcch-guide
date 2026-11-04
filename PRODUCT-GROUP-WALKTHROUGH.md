@@ -1,5 +1,10 @@
 # AWS CloudTrail into Sentinel GCC High: exactly how the working test was built
 
+**This is the earlier CloudFormation experiment.** The separate
+[commercial-package walkthrough](PRODUCT-GROUP-PACKAGE-WALKTHROUGH.md)
+documents the actual Microsoft-package mirror and execution. Do not mix the
+two sets of evidence or treat the original CloudFormation results as package proof.
+
 ## Read this first
 
 This is the **CloudFormation + Azure CLI/REST path actually used** on November 4,

@@ -4,7 +4,7 @@
 Prepares Microsoft's AWS setup scripts and manages a CloudTrail S3 connector in Azure Government.
 .DESCRIPTION
 Inspect is read-only. PrepareAws creates a corrected local copy of the pinned upstream
-government package; it does not run that package. Connect requires AWS CLI preflight,
+commercial package; it does not run that package. Connect requires AWS CLI preflight,
 creates only a new backend connector, and refuses conflicting queue consumers.
 Verify requires actual recent ingested events. No Content hub solution is installed.
 #>
@@ -30,7 +30,7 @@ $apiVersion = '2025-10-01-preview'
 $arm = 'https://management.usgovcloudapi.net'
 $issuer = 'sts.windows.net/cab8a31a-1906-4287-a0d8-4eef66b95f6e/'
 $audience = 'api://d4230588-5f84-4281-a9c7-2c15194b28f7'
-$archiveHash = '5522D4324F8A36EE0315E372AF9594280B120D3170258A88DD26196BF7CEF56A'
+$archiveHash = '0586346CA75A79F04E59AFAD778499F50F1C1383A4672A3405CB3E132DC2377F'
 
 function Invoke-JsonCli {
     param([string]$Command, [string[]]$Arguments)
@@ -121,7 +121,7 @@ if ($Mode -eq 'Inspect') {
 
 if ($Mode -eq 'PrepareAws') {
     Assert-AwsSelection
-    $archive = Join-Path $PSScriptRoot 'ConfigAwsS3DataConnectorScriptsGov.zip'
+    $archive = Join-Path $PSScriptRoot 'ConfigAwsS3DataConnectorScripts.zip'
     if (-not (Test-Path -LiteralPath $archive)) { throw "Missing pinned official package: $archive. See the guide." }
     if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $archiveHash) {
         throw 'Official package checksum differs from the reviewed snapshot. Review the new package before changing the pinned hash.'
@@ -133,17 +133,28 @@ if ($Mode -eq 'PrepareAws') {
         try {
             $null = New-Item -ItemType Directory -Path $staging
             Expand-Archive -LiteralPath $archive -DestinationPath $staging
-            $nestedName = if ($AwsPartition -eq 'aws') { 'ConfigAwsComToAzureGov.zip' } else { 'ConfigAwsGovToAzureGov.zip' }
+            $nestedName = if ($AwsPartition -eq 'aws') { 'ConfigAwsComToAzureCom.zip' } else { 'ConfigAwsGovToAzureCom.zip' }
             Expand-Archive -LiteralPath (Join-Path $staging $nestedName) -DestinationPath $destination
             $cloudEnv = if ($AwsPartition -eq 'aws') { 'Com' } else { 'Gov' }
-            $constants = @(
-                "# Prepared for Azure Government; original official ZIP is retained unchanged."
-                "`$script:SentinelClientId = '$audience'"
-                "`$script:SentinelTenantId = 'cab8a31a-1906-4287-a0d8-4eef66b95f6e'"
-                "`$script:CloudEnv = '$cloudEnv'"
-                "`$script:AwsCloudResource = 'arn:$AwsPartition'"
-            )
-            $constants | Set-Content -LiteralPath (Join-Path $destination 'Enviornment\EnviornmentConstants.ps1') -Encoding utf8
+            $constantsPath = Join-Path $destination 'Enviornment\EnviornmentConstants.ps1'
+            $constants = Get-Content -LiteralPath $constantsPath -Raw
+            $settings = @{
+                SentinelClientId = $audience
+                SentinelTenantId = 'cab8a31a-1906-4287-a0d8-4eef66b95f6e'
+                CloudEnv = $cloudEnv
+                AwsCloudResource = "arn:$AwsPartition"
+            }
+            foreach ($setting in $settings.GetEnumerator()) {
+                $pattern = '(?m)^([ \t]*\$script:{0}[ \t]*=[ \t]*)''[^'']*''' -f $setting.Key
+                if ([regex]::Matches($constants, $pattern).Count -ne 1) {
+                    throw "Expected one active assignment for $($setting.Key) in the pinned commercial package."
+                }
+                $constants = [regex]::Replace($constants, $pattern, {
+                    param($match)
+                    $match.Groups[1].Value + "'$($setting.Value)'"
+                })
+            }
+            Set-Content -LiteralPath $constantsPath -Value $constants -Encoding utf8 -NoNewline
         }
         finally {
             if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }

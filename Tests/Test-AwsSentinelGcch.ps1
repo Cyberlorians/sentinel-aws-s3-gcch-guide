@@ -188,14 +188,34 @@ try {
         Assert-Equal $evidence.Result.tables[0].rows[0][2] 2
         if ($evidence.Query -notlike '*123456789012*') { throw 'Query must filter the selected account.' }
     }
-    Run-Case 'Prepare both official package variants with correct government constants' {
+    Run-Case 'Prepare commercial-package variants preserving files and correct active government constants' {
+        $referenceRoot = Join-Path $testRoot 'commercial-reference'
+        Expand-Archive -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'ConfigAwsS3DataConnectorScripts.zip') -DestinationPath $referenceRoot
         foreach ($partition in @('aws', 'aws-us-gov')) {
             & $scriptPath @common -Mode PrepareAws -AwsPartition $partition -AwsAccountId '123456789012' `
                 -AwsRegion $(if ($partition -eq 'aws') { 'us-east-1' } else { 'us-gov-west-1' }) | Out-Null
-            $constants = Get-Content -Raw -LiteralPath (Join-Path $testRoot "prepared-$partition-to-gcch\Enviornment\EnviornmentConstants.ps1")
-            if ($constants -notlike '*d4230588-5f84-4281-a9c7-2c15194b28f7*' -or
-                $constants -notlike "*'arn:$partition'*" -or $constants -like '*1462b192*') {
+            $preparedPath = Join-Path $testRoot "prepared-$partition-to-gcch"
+            $active = & {
+                param($path)
+                . $path
+                @{ ClientId = $SentinelClientId; TenantId = $SentinelTenantId
+                    Partition = $AwsCloudResource; CloudEnv = $CloudEnv }
+            } (Join-Path $preparedPath 'Enviornment\EnviornmentConstants.ps1')
+            if ($active.ClientId -ne 'api://d4230588-5f84-4281-a9c7-2c15194b28f7' -or
+                $active.TenantId -ne 'cab8a31a-1906-4287-a0d8-4eef66b95f6e' -or
+                $active.Partition -ne "arn:$partition" -or
+                $active.CloudEnv -ne $(if ($partition -eq 'aws') { 'Com' } else { 'Gov' })) {
                 throw 'Incorrect prepared environment constants.'
+            }
+            $nestedName = if ($partition -eq 'aws') { 'ConfigAwsComToAzureCom.zip' } else { 'ConfigAwsGovToAzureCom.zip' }
+            $reference = Join-Path $referenceRoot $partition
+            Expand-Archive -LiteralPath (Join-Path $referenceRoot $nestedName) -DestinationPath $reference
+            $originalFiles = @(Get-ChildItem -LiteralPath $reference -Recurse -File)
+            Assert-Equal @(Get-ChildItem -LiteralPath $preparedPath -Recurse -File).Count $originalFiles.Count
+            foreach ($original in $originalFiles) {
+                $relative = [IO.Path]::GetRelativePath($reference, $original.FullName)
+                if ($relative -eq 'Enviornment\EnviornmentConstants.ps1') { continue }
+                Assert-Equal (Get-FileHash -LiteralPath (Join-Path $preparedPath $relative)).Hash (Get-FileHash -LiteralPath $original.FullName).Hash
             }
         }
     }
